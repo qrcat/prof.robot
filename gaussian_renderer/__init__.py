@@ -108,10 +108,12 @@ def render(viewpoint_camera,
         height=int(viewpoint_camera.image_height),
         packed=False,
         sh_degree=sh_degree,
+        render_mode='RGB+D',
     )
 
     # [1, H, W, 3] -> [3, H, W]
-    rendered_image = render_colors[0].permute(2, 0, 1)
+    rendered_image = render_colors[0, :, :, :3].permute(2, 0, 1)
+    rendered_depth = render_colors[0, :, :, 3] # depth map
     radii = info["radii"].squeeze(0) # [N,]
     try:
         info["means2d"].retain_grad() # [1, N, 2]

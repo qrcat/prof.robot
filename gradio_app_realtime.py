@@ -40,7 +40,8 @@ import torch.nn.functional as F
 import time
 
 gaussians, background_color, sample_cameras, kinematic_chain = initialize_gaussians()
-background_color = torch.zeros((3,)).cuda()
+background_color_list = [0, 0, 0]
+background_color = torch.tensor(background_color_list).float().cuda()
 example_camera = sample_cameras[0]
 
 model = mujoco.MjModel.from_xml_path(os.path.join(gaussians.model_path, 'robot_xml', 'scene.xml'))
@@ -107,7 +108,8 @@ def render_scene(*args):
                                          data, 
                                          renderer,
                                          lookat,
-                                         unnormalize_joint_angles=True)
+                                         unnormalize_joint_angles=True,
+                                         background_color=background_color_list)
     
     del renderer
     
@@ -309,7 +311,7 @@ with gr.Blocks() as demo:
 
 if __name__ == "__main__":
     try:
-        demo.queue().launch(share=True, server_port=8080)
+        demo.queue().launch(share=True, server_port=8900)
     finally:
         stop_optimization.set()
         optimization_thread.join()

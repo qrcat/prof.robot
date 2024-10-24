@@ -2,3 +2,6 @@ data
 output
 __pycache__
 *.pyc
+tmp
+.vscode
+.gradio

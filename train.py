@@ -81,6 +81,21 @@ def training(gaussians, scene, stage, tb_writer, dataset, opt, pipe, test_every,
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         gt_image = viewpoint_cam.original_image.cuda()
 
+        joint_pose = viewpoint_cam.joint_pose.float().requires_grad_(True)
+        dist = gaussians._df_net(joint_pose)
+        d_points = torch.ones_like(dist).requires_grad_(False)
+        # TODO: add eikonal loss here
+        grad_val = torch.autograd.grad(
+            outputs=dist,
+            inputs=joint_pose,
+            grad_outputs=d_points,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True)[0]
+        eikonal_loss = ((grad_val.norm(2, dim=-1) - 1) ** 2)
+        
+        gaussians._df_net(viewpoint_cam.joint_pose.float())
+
         if opt.random_background:
             robot_mask = viewpoint_cam.robot_mask.cuda()
             gt_image = gt_image * robot_mask + background.reshape(-1, 1, 1) * ~robot_mask

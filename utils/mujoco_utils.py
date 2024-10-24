@@ -88,15 +88,16 @@ def find_non_collision_pose(joint_limits,
         if is_canonical:
             joint_position = get_canonical_pose(joint_limits, robot_name=robot_name)
         else:
-            joint_position = np.random.uniform(joint_limits[:, 0], joint_limits[:, 1])
+            joint_position = np.random.uniform(joint_limits[:, 0], joint_limits[:, 1]) # 随机采样Pose
     
         mujoco.mj_resetData(model, data)
         data.qpos[:] = joint_position
         mujoco.mj_step(model, data)
         mujoco.mj_collision(model, data)
 
-        if (data.ncon <= n_collisions_allowed):
+        if (data.ncon <= max_n_collisions):
             break
+        break
         find_pose_iters += 1
         if find_pose_iters > 50 * n_collisions_allowed: #more iterations as well
             n_collisions_allowed += 1
@@ -104,7 +105,7 @@ def find_non_collision_pose(joint_limits,
         if n_collisions_allowed > MAX_N_COLLISIONS:
             print(f"[{robot_name}] Failed to generate non-collision sample")
             raise Exception(f"[{robot_name}] Failed to generate non-collision sample")
-    return joint_position
+    return joint_position, data.ncon, find_pose_iters
 
 def compute_camera_extrinsic_matrix(cam):
     """Returns the 4x4 extrinsic matrix considering lookat, distance, azimuth, and elevation."""

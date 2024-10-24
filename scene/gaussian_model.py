@@ -74,6 +74,21 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
+    def build_df_mlp(self): # TODO add distance field
+        self._df_net = nn.Sequential(
+            nn.Linear(self.num_joints, 256),
+            nn.Linear(256, 512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 256),
+            nn.LeakyReLU(),
+            nn.Linear(256, 1),
+            nn.Softplus()
+        )
+
     def __init__(self, sh_degree : int, args, device='cuda'):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree  
