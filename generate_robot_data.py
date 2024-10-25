@@ -76,7 +76,7 @@ class MujocoActor:
                                 self.model, 
                                 self.data, 
                                 is_canonical,
-                                max_n_collisions=200 if is_canonical else 0, #canonical pose shouldn't have collision
+                                max_n_collisions=0 if is_canonical else 10, #canonical pose shouldn't have collision
                                 robot_name=self.robot_name) #returns a j-vector
 
         #generate list of camera poses that are going to be used for this sample
@@ -211,7 +211,13 @@ class MujocoActor:
 
 def generate_data(num_actors, num_samples, model_xml_dir, save_dir, args, is_canonical=False, is_test=False, verbose=False): # 产生数据-
 
-    actors = [MujocoActor.remote(actor_id, model_xml_dir, save_dir) for actor_id in range(num_actors)]
+    actors = [MujocoActor.remote(actor_id, 
+                                 model_xml_dir, 
+                                 save_dir,
+                                 diffuse_light_params=(args.diffuse_intensity,)*3,
+                                 ambient_light_params=(args.ambient_intensity,)*3,
+                                 resolution=(args.resolution,)*2,
+                                 ) for actor_id in range(num_actors)]
 
     tasks = []
     for i in range(num_samples):
@@ -265,6 +271,9 @@ if __name__ == "__main__":
     parser.add_argument('--num_samples', type=int, default=10000, help='Number of samples.')
     parser.add_argument('--num_test', type=int, default=500, help='Number of test samples.')
     parser.add_argument('--num_actors', type=int, default=20, help='Number of actors.')
+    parser.add_argument('--resolution', type=int, default=480, help='Image resolution(<480).')
+    parser.add_argument('--diffuse_intensity', type=float, default=0.9, help='Diffuse Intensity(<1.0).')
+    parser.add_argument('--ambient_intensity', type=float, default=0.9, help='Ambient Intensity(<1.0).')
     parser.add_argument('--camera_distance_factor', type=float, default=1.0, help='Factor to scale the camera distance, change this depending on robot size.')
     parser.add_argument('--debug', action='store_true', help='Debug mode.')
     parser.add_argument('--verbose', action='store_true', help='Verbose mode.')
