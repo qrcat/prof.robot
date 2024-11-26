@@ -14,12 +14,14 @@ def build_chain_relation_map(path, body: Union[None, str, int] = None):
         root_body = model.body(0)
     else:
         root_body = model.body(body)
-    root_frame = frame.Frame(root_body.name,
-                             link=frame.Link(root_body.name,
-                                            offset=tf.Transform3d(rot=root_body.quat, pos=root_body.pos)),
-                             joint=frame.Joint())
+    root_frame = frame.Frame(
+        root_body.name,
+        link=frame.Link(
+            root_body.name, offset=tf.Transform3d(rot=root_body.quat, pos=root_body.pos)
+        ),
+        joint=frame.Joint(),
+    )
     _build_chain_recurse(model, root_frame, root_body)
-
 
     # build relation
     c = chain.Chain(root_frame)
@@ -32,6 +34,7 @@ def build_chain_relation_map(path, body: Union[None, str, int] = None):
         while item and item[0] == -1:
             item.pop(0)
         if item:
-            if item[-1] == -1: continue
-            output_list.append(item)
+            if item[-1] == -1:
+                continue
+            output_list.append([i for i in item if i != -1])
     return output_list, c

@@ -68,6 +68,18 @@ class MujocoActor:
         
         save_robot_metadata(self.model, self.model_xml_dir, self.save_dir)
 
+
+    def sample_ctrl(self, start=None, end=None):
+        if start is None and end is None:
+            return np.random.uniform(self.model.actuator_ctrlrange[:, 0], self.model.actuator_ctrlrange[:, 1]) # 随机采样Pose
+        elif start is not None and end is None:
+            return np.random.uniform(self.model.actuator_ctrlrange[start:, 0], self.model.actuator_ctrlrange[start:, 1]) # 随机采样Pose
+        elif start is None and end is not None:
+            return np.random.uniform(self.model.actuator_ctrlrange[:end, 0], self.model.actuator_ctrlrange[:end, 1]) # 随机采样Pose
+        elif start is not None and end is not None:
+            return np.random.uniform(self.model.actuator_ctrlrange[start:end, 0], self.model.actuator_ctrlrange[start:end, 1]) # 随机采样Pose
+
+    
     def get_uniform_pose(self, num_joints=None) -> np.ndarray:
         if num_joints is None:
             return np.random.uniform(self.model.jnt_range[:, 0], self.model.jnt_range[:, 1]) # 随机采样Pose
@@ -86,57 +98,34 @@ class MujocoActor:
         return joint_position
 
     def generate_and_save_pc(self, sample_id, args, is_canonical=False, is_test=False, verbose=False, num_joints=6):
-        joint_list = []
-        colli_list = []
+        ctrl_list = []
+        qpos_list = []
 
         init_joint = None
-        while len(joint_list) < 100000:
-            if random.random() < 0.1: init_joint = None
+        while len(ctrl_list) < 10000:
 
-            if init_joint is not None:
-                pose = self.sample_pose(init_joint, 5, num_joints)
-            else:
-                pose = self.get_uniform_pose(num_joints) # 随机采样一个pose
-            
-            mujoco.mj_resetData(self.model, self.data)
-            self.data.qpos[:num_joints] = pose
-            mujoco.mj_step(self.model, self.data)
-            mujoco.mj_collision(self.model, self.data)
+            ctrl = self.sample_ctrl(start=6)
+            self.data.ctrl[6:] = ctrl
+            # self.data.qpos[:6] = ctrl[:6]
+            mujoco.mj_step(self.model, self.data, 100)
 
-            if self.data.ncon == 0:
-                init_joint = pose
-            elif random.random() < 0.6:
-                continue
-
-            joint_list.append(pose)
-            colli_list.append(self.data.ncon)
+            ctrl_list.append(self.data.ctrl)
+            qpos_list.append(self.data.qpos)
 
         #file saving stuff
         directory_name = f"sample_{sample_id}" 
-        if is_canonical:
-            directory_name = "canonical_" + directory_name
-        if is_test:
-            directory_name = "test_" + directory_name
         unique_dir = os.path.join(self.save_dir, directory_name)
-
-        # Use FileLock to ensure only one actor creates the directory
-
         if not os.path.exists(unique_dir):
             os.makedirs(unique_dir, exist_ok=True)
+        # print(directory_name)
 
-        joint = np.asarray(joint_list)
-        colls = np.asarray(colli_list)
+        ctrl = np.asarray(ctrl_list)
+        qpos = np.asarray(qpos_list)
 
-        plt.figure()
-        plt.hist(colls, np.unique(colls).size)
-        plt.savefig(os.path.join(unique_dir, 'hist.jpg'))
-        plt.close()
-
-        with open(os.path.join(unique_dir, 'data.npz'), 'wb') as f:
+        with open(os.path.join(unique_dir, 'ctrl.npz'), 'wb') as f:
             np.savez(f, 
-                     joint=joint, 
-                    #  dists=dists,
-                     collision=colls,
+                     ctrl=ctrl, 
+                     qpos=qpos,
                      )
     
 def generate_data(num_actors, num_samples, model_xml_dir, save_dir, args, is_canonical=False, is_test=False, verbose=False): # 产生数据
@@ -171,16 +160,6 @@ def generate_data(num_actors, num_samples, model_xml_dir, save_dir, args, is_can
 
     pbar.close()
     
-    # Clean up lock files
-    clean_lock_files(save_dir)
-
-def clean_lock_files(directory):
-    lock_files = glob.glob(os.path.join(directory, "*.lock"))
-    for lock_file in lock_files:
-        try:
-            os.remove(lock_file)
-        except OSError as e:
-            print(f"Error deleting lock file {lock_file}: {e}")
 
 if __name__ == "__main__":
     import time 
@@ -199,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument('--verbose', action='store_true', help='Verbose mode.')
     args = parser.parse_args(
         [
-            "--model_xml_dir", "collision_scene/universal_robots_ur5e_scene3",
+            "--model_xml_dir", "mujoco_demo_control/universal_robots_ur5e_robotiq_empty",
         ]
     )
 
@@ -210,14 +189,11 @@ if __name__ == "__main__":
         dataset_name = args.dataset_name
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    save_dir = f"./data/{dataset_name}_collision"
+    save_dir = f"./data/{dataset_name}_ctrl"
 
     if os.path.exists(save_dir):
         shutil.rmtree(save_dir)
-    os.makedirs(save_dir, exist_ok=True)
-    print(f"Saving data to {save_dir}")
-
-
+    os.makedirs(save_dir, exist_ok=True) 
     ray.init()
 
     num_actors = args.num_actors
@@ -236,6 +212,3 @@ if __name__ == "__main__":
     assert num_test % num_actors == 0
     
     generate_data(num_actors, num_samples, model_xml_dir, save_dir, args=args, is_test=False, is_canonical=False, verbose=args.verbose)
-
-    # Final cleanup of any remaining lock files
-    clean_lock_files(save_dir)

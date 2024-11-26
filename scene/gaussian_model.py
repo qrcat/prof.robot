@@ -316,15 +316,15 @@ class GaussianModel:
         self.active_sh_degree = self.max_sh_degree
 
         # Load linear robot skinning weights (if they exist)
-        lrs = torch.load(os.path.join(os.path.dirname(path), 'lrs.pth'))
+        lrs = torch.load(os.path.join(os.path.dirname(path), 'lrs.pth'), weights_only=True)
         self._lrs = nn.Parameter(lrs.to(self.device).requires_grad_(True)) if lrs else None
         
         # Load lrs_model
-        self.lrs_model.load_state_dict(torch.load(os.path.join(os.path.dirname(path), 'lrs_model.pth')))
+        self.lrs_model.load_state_dict(torch.load(os.path.join(os.path.dirname(path), 'lrs_model.pth'), weights_only=True))
         self.lrs_model = self.lrs_model.to(self.device)
 
         # Load appearance deformation model (if they exist)
-        self.appearance_deformation_model.load_state_dict(torch.load(os.path.join(os.path.dirname(path), 'deform_model.pth')))
+        self.appearance_deformation_model.load_state_dict(torch.load(os.path.join(os.path.dirname(path), 'deform_model.pth'), weights_only=True))
         self.appearance_deformation_model = self.appearance_deformation_model.to(self.device)
 
     def replace_tensor_to_optimizer(self, tensor, name):

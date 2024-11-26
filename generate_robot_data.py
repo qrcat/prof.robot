@@ -54,7 +54,7 @@ class MujocoActor:
                 self.model = mujoco.MjModel.from_xml_path(self.model_xml_path)
                 self.data = mujoco.MjData(self.model)
                 self.save_dir = save_dir
-                self.renderer = mujoco.Renderer(self.model, resolution[0], resolution[1])
+                self.renderer = mujoco.Renderer(self.model, *resolution)
                 success = True
             except Exception as e:
                 attempt += 1
@@ -76,7 +76,7 @@ class MujocoActor:
                                 self.model, 
                                 self.data, 
                                 is_canonical,
-                                max_n_collisions=0 if is_canonical else 10, #canonical pose shouldn't have collision
+                                max_n_collisions=0 if is_canonical else 0, #canonical pose shouldn't have collision
                                 robot_name=self.robot_name) #returns a j-vector
 
         #generate list of camera poses that are going to be used for this sample
@@ -85,7 +85,7 @@ class MujocoActor:
         images, depth_images, intrinsic_matrices, extrinsic_matrices = self.render_images(joint_position, 
                                                                                           camera_params,
                                                                                           render_depth=True,
-                                                                                          lookat=[0, 0, 0])
+                                                                                          lookat=[0.15, 0, 0])
 
         pcds = []
         for i in range(len(images)):
@@ -279,7 +279,7 @@ if __name__ == "__main__":
     parser.add_argument('--verbose', action='store_true', help='Verbose mode.')
     args = parser.parse_args()
 
-    model_xml_dir = args.model_xml_dir   
+    model_xml_dir = args.model_xml_dir
     if not args.dataset_name:
         dataset_name = os.path.basename(model_xml_dir)
     else:

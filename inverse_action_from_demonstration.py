@@ -1,4 +1,12 @@
+import os
+
+
+from collision.utils import get_normalized_function
+from collision.chain_utils import build_chain_relation_map
+from collision.network import SingleNetwork, HyperNetwork
+
 from functools import wraps
+from itertools import cycle
 import os
 from typing import Dict, Tuple
 
@@ -17,90 +25,83 @@ import numpy as np
 import mujoco
 from PIL import Image
 
+
 from torch.utils.data import Dataset
 from torchvision.utils import save_image
 from torchvision.transforms import transforms
 
+import json
 from pathlib import Path
 
 
 class DummyCam:
-    def __init__(self, azimuth, elevation, distance):
+    def __init__(self, azimuth, elevation, distance, lookat=None):
         self.azimuth = azimuth
         self.elevation = elevation
         self.distance = distance
-        self.lookat = [0, 0, 0]  # Force lookat to be [0, 0, 0]
+        self.lookat = [0, 0, 0] if lookat is None else lookat
 
-def generate_camera(dummy: DummyCam):
-    # Configure the camera
-    cam = mujoco.MjvCamera()
-    mujoco.mjv_defaultCamera(cam)
-    cam.distance = dummy.distance
-    cam.azimuth = dummy.azimuth
-    cam.elevation = dummy.elevation
-    cam.lookat = np.asarray(dummy.lookat)
-
-    return cam
-
-def optimize(gaussians, init_params, background_color, gt_pkg: dict, initial_lr=0.02, decay_factor=0.95, decay_steps=50, max_iteration=200):
+def optimize(gaussians, init_params, background_color, gt_pkg: dict, norm_fun, initial_lr=0.02, decay_factor=0.5, decay_steps=50, max_iteration=200, sdf_model=None):
     bg_color_t = torch.tensor(background_color).float().cuda() / 255.0
 
-    gt_image = gt_pkg['image'].cuda()
-    gt_mask = gt_pkg['mask'][..., None].cuda()
+    camera_list, image_list, depth_list = gt_pkg["camera"], gt_pkg["image"], gt_pkg["depth"]
 
-    joint_angles = torch.tensor(init_params, dtype=torch.float32, requires_grad=True)
+    image_list = [image.cuda() for image in image_list]
+    depth_list = [depth.cuda() for depth in depth_list]
 
-    azimuth, elevation, distance = 0, -45, 3  # Fixed camera parameters
-
-    dummy_cam = DummyCam(azimuth, elevation, distance)
-    camera_extrinsic_matrix = compute_camera_extrinsic_matrix(dummy_cam)
-
-    camera = Camera_Pose(torch.tensor(camera_extrinsic_matrix).clone().detach().float().cuda(), 0.78, 0.78, 480, 480, joint_pose=joint_angles, zero_init=True).cuda()
-
+    joint_angles = torch.nn.Parameter(
+        torch.tensor(init_params, dtype=torch.float32, requires_grad=True, device='cuda'),
+          requires_grad=True)
+    def get_gs_camera(camera_info: dict):
+        dummy_cam = DummyCam(camera_info['azimuth'], camera_info['elevation'], camera_info['distance'], lookat=camera_info['lookat'])
+        camera_extrinsic_matrix = compute_camera_extrinsic_matrix(dummy_cam)
+        return Camera_Pose(torch.tensor(camera_extrinsic_matrix).clone().detach().float().cuda(), 0.78, 0.78, 480, 480, joint_pose=norm_fun(joint_angles), zero_init=True).cuda()
+    
+    camera_list = [get_gs_camera(camera_info) for camera_info in camera_list]
     optimizer = torch.optim.Adam([joint_angles], lr=initial_lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=decay_steps, gamma=decay_factor)
+
+    camera_pkg = cycle(zip(camera_list, image_list, depth_list))
+    sdf = torch.zeros(1)
 
     tbar = trange(max_iteration, leave=False)
     for iteration in tbar:
         optimizer.zero_grad()
 
+        camera, gt_image, gt_depth = next(camera_pkg)
+
         camera.joint_pose = joint_angles
         output_pkg = render(camera, gaussians, bg_color_t)
         gaussian_tensor = output_pkg['render']
-        alpha_tensor = output_pkg['alpha']
+        depth_tensor = output_pkg['depth']
 
         Ll2 = F.mse_loss(gaussian_tensor, gt_image)
-        Lalpha = F.cross_entropy(alpha_tensor, gt_mask)
+        Ldepth = F.mse_loss(depth_tensor, gt_depth)
 
-        loss = Ll2 + 0.01*Lalpha
-        
+        loss = Ll2 + Ldepth
+        loss = loss / len(camera_list)
         loss.backward()
-        optimizer.step()
-        scheduler.step()
+
+        if iteration % len(camera_list):
+            sdf, s = sdf_model(joint_angles[None])
+
+            if sdf > 0:
+                (0.1 * sdf).backward()
+
+            optimizer.step()
+            scheduler.step()
 
         tbar.set_postfix({
             "Iteration": format(iteration, "03d"),
             "L2": format(Ll2, ".5f"),
-            "La": format(Lalpha, ".5f"),
+            "Ld": format(Ldepth, ".5f"),
             "LR": format(scheduler.get_last_lr()[0], ".5f"),
+            "SDF": format(sdf.item(), ".5f"),
         })
 
     save_image(gaussian_tensor, 'test.png')
 
     return joint_angles.detach().cpu().numpy(), gaussian_tensor
-
-def get_normalized_function(low, hight):
-    lower_limits = np.asarray(low)
-    upper_limits = np.asarray(hight)
-    scale = 2 / (upper_limits - lower_limits)
-    
-    def normalized(joint_positions):
-        return (joint_positions - lower_limits) * scale - 1.
-    
-    def unnormalized(joint_positions):
-        return (joint_positions + 1.) / scale + lower_limits
-
-    return normalized, unnormalized
 
 @torch.no_grad()
 def forward_render(gaussians, init_params, background_color):
@@ -108,7 +109,7 @@ def forward_render(gaussians, init_params, background_color):
 
     joint_angles = torch.tensor(init_params, dtype=torch.float32, requires_grad=True)
 
-    azimuth, elevation, distance = 0, -45, 3  # Fixed camera parameters
+    azimuth, elevation, distance = 0, -10, 2.5 # Fixed camera parameters
 
     dummy_cam = DummyCam(azimuth, elevation, distance)
     camera_extrinsic_matrix = compute_camera_extrinsic_matrix(dummy_cam)
@@ -124,8 +125,18 @@ def forward_render(gaussians, init_params, background_color):
 
 class ImageDemoDataset(Dataset):
     def __init__(self, data_path: Path, background_color):
-        self.images_path = sorted(data_path.glob("image/*.png"))
-        self.segments_path = sorted(Path(data_path).glob("seg/*.png"))
+        self.cameras = sorted(data_path.glob("[0-9][0-9]"))
+        self.camera_data = {}
+    
+        for camera_path in self.cameras:
+            with (camera_path / "camera.json").open('r') as f:
+                camera_info = json.load(f)
+            self.camera_data[camera_path] = {
+                "camera_info": camera_info,
+                "image": sorted(camera_path.glob("[0-9][0-9][0-9][0-9].png")),
+                "mask": sorted(camera_path.glob("seg_[0-9][0-9][0-9][0-9].png")),
+                "depth": sorted(camera_path.glob("depth_[0-9][0-9][0-9][0-9].npy")),
+            }
 
         self.action = np.load(data_path / "qpos.npy")
 
@@ -136,16 +147,31 @@ class ImageDemoDataset(Dataset):
         self.background_tuple = background_color
     
     def __getitem__(self, index) -> Dict[str, torch.Tensor]:
-        image = Image.open(self.images_path[index])
-        seg = Image.open(self.segments_path[index])
-        bg = Image.new("RGB", image.size, self.background_tuple)
+        camera_list = []
+        image_list = []
+        mask_list = []
+        depth_list = []
 
-        result = Image.composite(image, bg, seg)
+        for camera_data in self.camera_data.values():
+            camera_list.append(camera_data['camera_info'])
+
+            image = Image.open(camera_data['image'][index])
+            seg = Image.open(camera_data['mask'][index])
+            bg = Image.new("RGB", image.size, self.background_tuple)
+            depth = np.load(camera_data['depth'][index]) * np.asarray(seg)
+
+            result = Image.composite(image, bg, seg)
+
+            image_list.append(self.preprocess(result).float())
+            mask_list.append(self.preprocess(seg).float())
+            depth_list.append(torch.as_tensor(depth).float())
         
         return {
             "action": self.action[index],
-            "image": self.preprocess(result).float(),
-            "mask": self.preprocess(seg).float(),
+            "camera": camera_list,
+            "image": image_list,
+            "mask": mask_list,
+            "depth": depth_list,
         }
     
     def __len__(self) -> int:
@@ -173,6 +199,15 @@ def optimizer_pose(data_path: Path, model_path: Path):
 
     norm_fun, unnorm_fun = get_normalized_function(*kinematic_chain.get_joint_limits())
 
+    relation_map, chain = build_chain_relation_map((model_path / "robot_xml/scene.xml").as_posix())
+    sdf_model = HyperNetwork(chain.n_joints, relation_map)
+    state_dict = torch.load(model_path / 'sdf_net.ckpt', weights_only=True)
+    sdf_model.load_state_dict(state_dict)
+    for parameters in sdf_model.parameters():
+        parameters.requires_grad_(False)
+    sdf_model.cuda()
+    del state_dict
+
     @generate_video(data_path, "forward")
     def forward():
         for iteration, data_pkg in enumerate(tqdm(demo_ds, desc="Forward Data Frame")):
@@ -184,20 +219,24 @@ def optimizer_pose(data_path: Path, model_path: Path):
     def backward():
         inverse_actions = []
 
-        init_joint_angle = 6 * [0.0]
+        init_joint_angle = 14 * [0.0]
 
         for iteration, data_pkg in enumerate(tqdm(demo_ds, desc="Inverse Data Frame")):
             init_joint_angle, render_image = optimize(gaussians, 
                                                     init_joint_angle, 
                                                     background_tuple, 
                                                     data_pkg,
-                                                    initial_lr=0.01)
+                                                    norm_fun,
+                                                    initial_lr=0.005,
+                                                    max_iteration=200,
+                                                    sdf_model=sdf_model,
+                                                    )
             inverse_actions.append(init_joint_angle)
             save_image(render_image, data_path / "inverse" / f"{iteration:04d}.png")
             
         np.save(data_path / "inverse_qpos.npy", np.stack(inverse_actions))
     
-    forward()
+    # forward()
     backward()
 
 if __name__ == "__main__":
@@ -206,8 +245,8 @@ if __name__ == "__main__":
     import shutil
 
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument('--data_path', type=str, default="output/demonstration/universal_robots_ur5e", help='Path to the demonstration file.')
-    parser.add_argument('--model_path', type=str, default="output/universal_robots_ur5e_experiment", help='Path to the demonstration file.')
+    parser.add_argument('--data_path', type=str, default="output/demonstration/universal_robots_ur5e_robotiq", help='Path to the demonstration file.')
+    parser.add_argument('--model_path', type=str, default="output/universal_robots_ur5e_robotiq", help='Path to the demonstration file.')
     args = parser.parse_args()
 
     data_path = Path(args.data_path)

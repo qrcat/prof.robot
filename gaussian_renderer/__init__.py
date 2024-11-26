@@ -95,7 +95,7 @@ def render(viewpoint_camera,
     # print("grad before", viewpoint_camera.v.grad)
     # breakpoint()
 
-    render_colors, render_alphas, info = rasterization(
+    rendered_colors, rendered_alphas, info = rasterization(
         means=means3D,  # [N, 3]
         quats=rotations,  # [N, 4]
         scales=scales,  # [N, 3]
@@ -112,8 +112,8 @@ def render(viewpoint_camera,
     )
 
     # [1, H, W, 3] -> [3, H, W]
-    rendered_image = render_colors[0, :, :, :3].permute(2, 0, 1)
-    rendered_depth = render_colors[0, :, :, 3] # depth map
+    rendered_image = rendered_colors[0, :, :, :3].permute(2, 0, 1)
+    rendered_depth = rendered_colors[0, :, :, 3] # depth map
     radii = info["radii"].squeeze(0) # [N,]
     try:
         info["means2d"].retain_grad() # [1, N, 2]
@@ -124,6 +124,8 @@ def render(viewpoint_camera,
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return {"render": rendered_image,
+            "alpha": rendered_alphas,
+            "depth": rendered_depth,
             "viewspace_points": info["means2d"],
             "visibility_filter" : radii > 0,
             "radii": radii}

@@ -5,3 +5,11 @@ __pycache__
 tmp
 .vscode
 .gradio
+
+
+collision_scene
+
+# mujoco
+mujoco_usdpkg
+mujoco_menagerie
+mujoco_demo_control

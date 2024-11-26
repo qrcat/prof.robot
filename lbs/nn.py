@@ -10,8 +10,9 @@ from tqdm import tqdm
 import traceback
 from lbs.lbs import lrs
 from utils.chamferdist_utils import chamfer_distance, mean_chamfer_distance
-from torch.cuda.amp import autocast, GradScaler
-
+# from torch.cuda.amp import autocast, GradScaler
+from torch.amp.grad_scaler import GradScaler
+from torch.amp.autocast_mode import autocast
 
 class IRS(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=256, n_layers=3):
@@ -72,6 +73,7 @@ def train_lrs(gaussians, implicit=True):
 
     compiled_chamfer_distance = torch.compile(mean_chamfer_distance, fullgraph=True)
     scaler = GradScaler()
+    
 
     for epoch in tqdm(range(opt.lrs_train_epochs)):
         pbar = tqdm(total=len(dataloader), desc=f'Epoch {epoch}')
@@ -83,7 +85,7 @@ def train_lrs(gaussians, implicit=True):
                 
                 gaussians.optimizer_lrs.zero_grad()
                 
-                with autocast():
+                with autocast('cuda'):
                     v_deformed, _ = lrs(pose, 
                                         v_template, 
                                         None, 
@@ -97,13 +99,13 @@ def train_lrs(gaussians, implicit=True):
                 running_average = 0.99 * running_average + 0.01 * loss.item()
 
                 if running_average < 1e-4:
-                    print("Loss is less than 1e-4, breaking")
+                    pbar.write("Loss is less than 1e-4, breaking")
                     break
 
                 scaler.step(gaussians.optimizer_lrs)
                 scaler.update()
 
-                pbar.set_description(f"Loss: {loss.item()}, Running Average: {running_average}")
+                pbar.set_description(f"Loss: {loss.item():.7f}, Running Average: {running_average:.7f}")
                 pbar.update(1)
             except Exception as e:
                 print(e)

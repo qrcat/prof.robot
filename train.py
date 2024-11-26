@@ -39,7 +39,7 @@ def training(gaussians, scene, stage, tb_writer, dataset, opt, pipe, test_every,
     first_iter = 0
     gaussians.training_setup(opt)
     if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
+        (model_params, first_iter) = torch.load(checkpoint, weights_only=False)
         gaussians.restore(model_params, opt)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
@@ -80,28 +80,25 @@ def training(gaussians, scene, stage, tb_writer, dataset, opt, pipe, test_every,
         render_pkg = render(viewpoint_cam, gaussians, background, stage=stage)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         gt_image = viewpoint_cam.original_image.cuda()
-
-        joint_pose = viewpoint_cam.joint_pose.float().requires_grad_(True)
-        dist = gaussians._df_net(joint_pose)
-        d_points = torch.ones_like(dist).requires_grad_(False)
-        # TODO: add eikonal loss here
-        grad_val = torch.autograd.grad(
-            outputs=dist,
-            inputs=joint_pose,
-            grad_outputs=d_points,
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True)[0]
-        eikonal_loss = ((grad_val.norm(2, dim=-1) - 1) ** 2)
+        gt_depth = viewpoint_cam.depth.cuda()
         
-        gaussians._df_net(viewpoint_cam.joint_pose.float())
-
+        robot_mask = viewpoint_cam.robot_mask.cuda()
         if opt.random_background:
-            robot_mask = viewpoint_cam.robot_mask.cuda()
             gt_image = gt_image * robot_mask + background.reshape(-1, 1, 1) * ~robot_mask
+        gt_depth = gt_depth * robot_mask
 
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        
+        depth = render_pkg['depth']
+        # Ll1_depth = torch.nn.functional.l1_loss(depth[robot_mask], gt_depth[robot_mask])
+        Ll1_depth = torch.nn.functional.l1_loss(depth, gt_depth)
+
+        opacity = gaussians.get_opacity[visibility_filter]
+
+        Lentropy = - torch.mean(opacity * torch.log(opacity + 1e-5))
+
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + Ll1_depth + 0.1 * Lentropy
+
         loss.backward()
 
         iter_end.record()
@@ -110,7 +107,10 @@ def training(gaussians, scene, stage, tb_writer, dataset, opt, pipe, test_every,
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({
+                    "Loss": f"{ema_loss_for_log:.{7}f}",
+                    "L1d": format(Ll1_depth.item(), '.5f'),
+                    })
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -133,7 +133,7 @@ def training(gaussians, scene, stage, tb_writer, dataset, opt, pipe, test_every,
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.1, scene.cameras_extent, size_threshold)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -152,13 +152,15 @@ def training(gaussians, scene, stage, tb_writer, dataset, opt, pipe, test_every,
 
             gaussians.optimizer.step()
             if stage == 'pose_conditioned':
-                gaussians.optimizer_appearance_deformation.step()
-                gaussians.optimizer_lrs.step()
+                if iteration % 2 == 0: # TODO
+                    gaussians.optimizer_appearance_deformation.step()
+                    gaussians.optimizer_lrs.step()
 
             gaussians.optimizer.zero_grad()
             if stage == 'pose_conditioned':
-                gaussians.optimizer_appearance_deformation.zero_grad()
-                gaussians.optimizer_lrs.zero_grad()
+                if iteration % 2 == 0: # TODO
+                    gaussians.optimizer_appearance_deformation.zero_grad()
+                    gaussians.optimizer_lrs.zero_grad()
 
             if (iteration % checkpoint_every == 0):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
