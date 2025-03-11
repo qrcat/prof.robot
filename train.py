@@ -236,17 +236,27 @@ def three_stage_training(dataset, hyper, opt, pipe, test_every, save_every, chec
     gaussians = GaussianModel(dataset.sh_degree, opt)
     scene = RobotScene(dataset, gaussians, opt_params=opt)
 
+    import time
+
     print("============ Training canonical Gaussian ============")
     # first stage, train the canonical gaussian
+    start_time = time.time()
     training(gaussians, scene, 'canonical', tb_writer, dataset, opt, pipe, test_every, save_every, checkpoint_iterations, checkpoint, debug_from)
-
+    elapsed = time.time() - start_time
+    print(f"Elapsed time: {elapsed} seconds")
     print("============ Training LBS model ============")
     # second stage
+    start_time = time.time()
     train_lrs(gaussians)
+    elapsed = time.time() - start_time
+    print(f"Elapsed time: {elapsed} seconds")
 
     print("============ Training pose conditioned Gaussian ============")
+    start_time = time.time()
     #first stage, train the canonical gaussian
     training(gaussians, scene, 'pose_conditioned', tb_writer, dataset, opt, pipe, test_every, save_every, checkpoint_iterations, checkpoint, debug_from)
+    elapsed = time.time() - start_time
+    print(f"Elapsed time: {elapsed} seconds")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ class DummyCam:
         self.azimuth = azimuth
         self.elevation = elevation
         self.distance = distance
-        self.lookat = copy.deepcopy(lookat)  # Force lookat to be [0, 0, 0]
+        self.lookat = copy.deepcopy(lookat)
 
 
 def generate_camera(dummy: DummyCam):
@@ -106,7 +106,7 @@ def update_reconstruction_dict(renderer, data, dummy_cams, cams):
     return reconstruction
 
 
-def get_normalized_function(low, hight):
+def  get_normalized_function(low, hight):
     lower_limits = torch.as_tensor(low, device="cuda")
     upper_limits = torch.as_tensor(hight, device="cuda")
     scale = 2 / (upper_limits - lower_limits)

@@ -192,14 +192,31 @@ def continuous_optimization():
             print("Optimization queue is empty")
     print("Continuous optimization thread stopped")
 
+
+def get_normalized_function(low, hight):
+    lower_limits = torch.as_tensor(low, device="cuda")
+    upper_limits = torch.as_tensor(hight, device="cuda")
+    scale = 2 / (upper_limits - lower_limits)
+
+    def normalized(joint_positions):
+        return (joint_positions - lower_limits) * scale - 1.0
+
+    def unnormalized(joint_positions):
+        return (joint_positions + 1.0) / scale + lower_limits
+
+    return normalized, unnormalized
+
+
 def optimize(embedding_input, dino_features, gaussian_params, initial_lr=0.02, decay_factor=0.95, decay_steps=50, loss_mode="dot", camera_list=None):
     def nclamp(input, min, max):
         return input.clamp(min=min, max=max).detach() + input - input.detach()
     
     print("initial pose:", gaussian_params)
+
+    norm, unnorm = get_normalized_function(kinematic_chain.get_joint_limits()[0], kinematic_chain.get_joint_limits()[1])
     
     joint_params = torch.nn.Parameter(
-        torch.tensor(gaussian_params, dtype=torch.float32),
+        torch.tensor(gaussian_params, dtype=torch.float32, device='cuda'),
         requires_grad=True
     )
     joint_angles = nclamp(joint_params, -1, 1)
@@ -260,8 +277,9 @@ def optimize(embedding_input, dino_features, gaussian_params, initial_lr=0.02, d
         camera = next(camera_loop)
 
         # joint_params = joint_params + torch.randn_like(joint_params) * joint_width/100 * initial_lr
+        joint_params
 
-        joint_angles = nclamp(joint_params, -1, 1)
+        joint_angles = nclamp(norm(joint_params), -1, 1)
         camera.joint_pose = joint_angles
 
         gaussian_tensor = render(camera, gaussians, background_color)['render']

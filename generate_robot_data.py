@@ -246,6 +246,8 @@ def generate_data(num_actors, num_samples, model_xml_dir, save_dir, args, is_can
         rate = num_files / elapsed_time
         pbar.set_description(f"Generating {sample_type} data for {robot_name} (Rate: {rate:.2f} files/sec)")
 
+    print(f"time usage {time.time() - start_time:.4f}")
+
     pbar.close()
     
     # Clean up lock files
