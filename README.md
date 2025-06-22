@@ -19,6 +19,8 @@
   <img src="assets/teaser-prof.robot.png" style="width:80%" />
 </div>
 
+</div>
+
 <br>
 
 
