@@ -211,7 +211,7 @@ class DrDynamicRobotData(data.Dataset):
 
         # Pre-load and store all scene datasets
         self.scenes = []
-        for scene_dir in scene_dirs:
+        for scene_dir in tqdm(scene_dirs, "Loading datasets..."):
             scene_dataset = DrDynamicSceneDataset(scene_dir, t=t, shuffle=False, num_points=num_points)
             self.scenes.append(scene_dataset)
         

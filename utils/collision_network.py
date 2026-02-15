@@ -102,6 +102,27 @@ class HyperEnbedding(nn.Module):
 
         return [model_joints[joint] for joint in pk_chain.get_joint_parameter_names()]
 
+class AdditiveAttentionPool(nn.Module):
+    def __init__(self, feat_dim, hidden_dim=128):
+        super().__init__()
+        self.attn = nn.Sequential(
+            nn.Linear(feat_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, x):
+        """
+        x: (B, N, C)
+        return: (B, C)
+        """
+        # attention scores
+        score = self.attn(x)              # (B, N, 1)
+        weight = torch.softmax(score, 1)  # (B, N, 1)
+
+        # weighted sum
+        return (weight * x).sum(dim=1)
+
 
 class PointNet(nn.Module):
     """PointNet for point cloud feature extraction.
@@ -123,35 +144,37 @@ class PointNet(nn.Module):
             self.mlp1 = nn.Sequential(
                 nn.Linear(3, hidden_dim),
                 nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Linear(hidden_dim, hidden_dim * 2),
                 nn.BatchNorm1d(hidden_dim * 2),
-                nn.ReLU(),
+                nn.LeakyReLU(),
             )
         else:
             self.mlp1 = nn.Sequential(
                 nn.Linear(3, hidden_dim),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Linear(hidden_dim, hidden_dim * 2),
-                nn.ReLU(),
+                nn.LeakyReLU(),
             )
+        
+        self.attn_pool = AdditiveAttentionPool(hidden_dim * 2)
 
         # Global feature extraction MLP
         if use_bn:
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim * 2, hidden_dim * 2),
                 nn.BatchNorm1d(hidden_dim * 2),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Linear(hidden_dim * 2, output_dim),
                 nn.BatchNorm1d(output_dim),
-                nn.ReLU(),
+                nn.LeakyReLU(),
             )
         else:
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim * 2, hidden_dim * 2),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Linear(hidden_dim * 2, output_dim),
-                nn.ReLU(),
+                nn.LeakyReLU(),
             )
 
         self._initialize_weights()
@@ -159,7 +182,7 @@ class PointNet(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm1d):
@@ -182,9 +205,10 @@ class PointNet(nn.Module):
         # Extract per-point features: (B*N, 3) -> (B*N, hidden_dim*2)
         x = self.mlp1(x)
 
-        # Max pooling across points: (B*N, hidden_dim*2) -> (B, hidden_dim*2)
+        # Pooling
         x = x.view(batch_size, num_points, -1)
-        x = torch.max(x, dim=1)[0]  # Global max pooling
+        x = self.attn_pool(x)
+        
 
         # Extract global features: (B, hidden_dim*2) -> (B, output_dim)
         x = self.mlp2(x)
