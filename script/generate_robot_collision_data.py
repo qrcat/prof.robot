@@ -242,15 +242,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true', help='Debug mode.')
     parser.add_argument('--verbose', action='store_true', help='Verbose mode.')
     parser.add_argument('--root_name', type=str, default='base', help='Root name of the robot.')
-    args = parser.parse_args(
-        [
-            # "--model_xml_dir", "collision_scene/xMate_SR3",
-            # "--root_name", "xMateSR3_base"
-
-            '--model_xml_dir', 'collision_scene/universal_robots_ur5e_scene3',
-            '--root_name', 'base',
-        ]
-    )
+    args = parser.parse_args()
 
     model_xml_dir = args.model_xml_dir   
     if not args.dataset_name:

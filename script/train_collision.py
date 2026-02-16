@@ -184,18 +184,6 @@ if __name__ == "__main__":
     parser.add_argument("--lipschitz", action='store_true')
     parser.add_argument("--steki", action='store_true')
 
-    args = parser.parse_args(
-        [
-            # '--data_path', 'data/xMate_SR3_collision',
-            # '--output_path', 'output/xMate_SR3_collision',
-            # '--root_name', 'xMateSR3_base',
-            # '--lipschitz',
-            # "--steki",
-
-            '--data_path', 'data/universal_robots_ur5e_scene3_collision',
-            '--output_path', 'output/universal_robots_ur5e_scene3_collision',
-            '--root_name', 'base',
-        ]
-    )
+    args = parser.parse_args()
 
     main(args)

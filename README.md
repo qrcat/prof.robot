@@ -46,13 +46,13 @@ if `gsplat` installation fails, please reference [gsplat](https://github.com/ner
 generate collision dataset:
 
 ```bash
-python generate_robot_collision_data.py --model_xml_dir mujoco_menagerie/universal_robots_ur5e --root_name base
+python -m script.generate_robot_collision_data --model_xml_dir mujoco_menagerie/universal_robots_ur5e --root_name base
 ```
 
 train
 
 ```bash
-python train_collision.py --data_path data/universal_robots_ur5e_collision --output_path output/universal_robots_ur5e_collision --root_name base
+python -m script.train_collision --data_path data/universal_robots_ur5e_collision --output_path output/universal_robots_ur5e_collision --root_name base
 ```
 
 ## Dynamic
