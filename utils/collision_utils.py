@@ -99,7 +99,7 @@ class JointSubsetData(data.Dataset):
         return self
 
     def __next__(self):
-        if self._current_idx > len(self):
+        if self._current_idx >= len(self):
             raise StopIteration
 
         result = self[self._current_idx]
@@ -159,7 +159,7 @@ class DrRobotData(data.Dataset):
         split_ratio.insert(0, 0.0)
         cumsum = np.cumsum(split_ratio)
         for prev_f, next_f in zip(cumsum[:-1], cumsum[1:]):
-            prev_i, next_i = ceil(len(self) * prev_f), ceil(len(self) * next_f)
+            prev_i, next_i = int(len(self) * prev_f), int(len(self) * next_f)
             subset.append(
                 JointSubsetData(
                     self.joints[prev_i:next_i], self.gts[prev_i:next_i], batchsize
@@ -256,7 +256,7 @@ class DrDynamicRobotData(data.Dataset):
         split_ratio = [0.0] + split_ratio
         cumsum = np.cumsum(split_ratio)
         for prev_f, next_f in zip(cumsum[:-1], cumsum[1:]):
-            prev_i, next_i = ceil(len(self) * prev_f), ceil(len(self) * next_f)
+            prev_i, next_i = int(len(self) * prev_f), int(len(self) * next_f)
             subset.append(
                 JointSubsetDataWithPC(
                     joints[prev_i:next_i],
@@ -432,7 +432,7 @@ class JointSubsetDataWithPC(data.Dataset):
         return self
 
     def __next__(self):
-        if self._current_idx > len(self):
+        if self._current_idx >= len(self):
             raise StopIteration
 
         result = self[self._current_idx]

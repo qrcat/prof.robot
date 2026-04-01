@@ -9,14 +9,13 @@ import pathlib
 from tqdm import tqdm
 from random import random
 from pathlib import Path
-from multiprocessing.pool import ThreadPool
 
 import mujoco
 import matplotlib.pyplot as plt
 
 from utils.mujoco_utils import save_robot_metadata
 from utils.pk_utils import build_chain_from_mjcf_path
-
+os.environ['MUJOCO_GL'] = 'disable'
 
 def save_ply_xyz(path, points):
     """
@@ -189,7 +188,7 @@ def generate_scene_xmls(
     base_scene_template_path,
     output_dir,
     num_scenes,
-    num_obs_range=(1, 20),
+    num_obs_range=(1, 10),
 ):
     """Generate scene XML files with obstacles."""
     with open(base_scene_template_path, "r") as f:
@@ -208,171 +207,215 @@ def generate_scene_xmls(
     print(f"Created {num_scenes} scene XML files")
 
 
-@ray.remote
-class MujocoActor:
-    """
-    One actor can process multiple scene XMLs sequentially.
-    """
+@ray.remote(num_cpus=1)
+def generate_sample(
+    scene_xml,
+    sample_id,
+    save_dir,
+    root_name,
+    num_poses=10000,
+):
+    model = mujoco.MjModel.from_xml_path(scene_xml)
+    data = mujoco.MjData(model)
 
-    def __init__(self, actor_id, save_dir, args):
-        self.actor_id = actor_id
-        self.save_dir = save_dir
-        self.args = args
-        self.model = None
-        self.data = None
-        self.chain = None
+    used_index = np.arange(model.njnt)
+    joint_range = model.jnt_range[used_index]
 
-    def load_scene(self, scene_xml_path):
-        """Load a new Mujoco scene"""
-        attempt, MAX_ATTEMPTS = 0, 5
-        success = False
+    def get_uniform_pose():
+        return np.random.uniform(
+            joint_range[:, 0],
+            joint_range[:, 1],
+        )
 
-        while not success and attempt < MAX_ATTEMPTS:
-            try:
-                self.chain = build_chain_from_mjcf_path(
-                    scene_xml_path, self.args.root_name
-                )
-                self.model = mujoco.MjModel.from_xml_path(scene_xml_path)
-                self.data = mujoco.MjData(self.model)
-
-                self.used_index = np.arange(self.model.njnt)
-                self.joint_range = self.model.jnt_range[self.used_index]
-
-                success = True
-            except Exception as e:
-                attempt += 1
-                time.sleep(1.5**attempt)
-
-        if not success:
-            raise RuntimeError(f"Failed to load scene {scene_xml_path}")
-
-    def get_uniform_pose(self):
-        return np.random.uniform(self.joint_range[:, 0], self.joint_range[:, 1])
-
-    def resample_pose(self, init_pose, std=0.1):
+    def resample_pose(init_pose, std=0.1):
         return np.clip(
             init_pose + np.random.normal(0, std, size=init_pose.shape),
-            self.joint_range[:, 0],
-            self.joint_range[:, 1],
+            joint_range[:, 0],
+            joint_range[:, 1],
         )
 
-    def generate_and_save_pc(
-        self,
-        scene_xml_path,
-        sample_id,
-        num_poses=10000,
-        is_canonical=False,
-        is_test=False,
-    ):
-        self.load_scene(scene_xml_path)
+    joint_list = []
+    colli_list = []
 
-        joint_list = []
-        colli_list = []
+    # --------------------------------
+    # Adaptive Sampling Parameters
+    # --------------------------------
 
-        p_reset = 1.0
-        p_drop = 0.5
-        std = 1.0
-        init_joint = None
+    target_collision_ratio = 0.5
+    max_iterations = num_poses * 5
 
-        while len(joint_list) < num_poses:
-            if init_joint is not None and random() < p_reset:
-                init_joint = None
+    p_reset = 0.15
+    p_drop_collision = 0.1
+    p_drop_no_collision = 0.5
 
-            pose = (
-                self.get_uniform_pose()
-                if init_joint is None
-                else self.resample_pose(init_joint, std)
-            )
+    std = 1.0
+    init_joint = None
 
-            mujoco.mj_resetData(self.model, self.data)
-            self.data.qpos[self.used_index] = pose
-            mujoco.mj_step(self.model, self.data)
-            mujoco.mj_collision(self.model, self.data)
+    iterations = 0
+    collision_count = 0
+    no_collision_count = 0
 
-            if self.data.ncon > 0:
-                init_joint = pose
-            elif random() < p_drop:
-                continue
+    # --------------------------------
+    # 自适应采样循环
+    # --------------------------------
 
-            joint_list.append(pose)
-            colli_list.append(self.data.ncon)
+    while len(joint_list) < num_poses and iterations < max_iterations:
 
-        prefix = "canonical_" if is_canonical else "test_" if is_test else ""
-        out_dir = os.path.join(self.save_dir, f"{prefix}sample_{sample_id:05d}")
-        os.makedirs(out_dir, exist_ok=True)
+        iterations += 1
 
-        joint = np.asarray(joint_list)
-        colls = np.asarray(colli_list)
+        if init_joint is not None and random() < p_reset:
+            init_joint = None
 
-        # statistics
-        plt.figure()
-        plt.pie(
-            [(colls > 0).sum(), (colls == 0).sum()],
-            labels=["Collision", "No Collision"],
-        )
-        plt.savefig(os.path.join(out_dir, "pie.jpg"))
-        plt.close()
-
-        np.savez(
-            os.path.join(out_dir, "data.npz"),
-            joint=joint,
-            collision=colls,
-            scene_xml=os.path.basename(scene_xml_path),
+        pose = (
+            get_uniform_pose()
+            if init_joint is None
+            else resample_pose(init_joint, std)
         )
 
-        # Extract and save obstacle point cloud
-        mujoco.mj_forward(self.model, self.data)
-        obstacle_pc = generate_obstacle_pointcloud(
-            self.model,
-            self.data,
-        )
-        if obstacle_pc is not None:
-            save_ply_xyz(os.path.join(out_dir, "obstacles.ply"), obstacle_pc)
-            print(f"Saved obstacle point cloud with {len(obstacle_pc)} points")
+        mujoco.mj_resetData(model, data)
 
+        data.qpos[used_index] = pose
+
+        mujoco.mj_step(model, data)
+        mujoco.mj_collision(model, data)
+
+        has_collision = data.ncon > 0
+
+        current_ratio = collision_count / max(len(joint_list), 1)
+
+        # --------------------------------
+        # 动态采样策略
+        # --------------------------------
+
+        if has_collision:
+
+            if current_ratio < target_collision_ratio:
+                keep_prob = 1.0 - p_drop_collision
+            else:
+                keep_prob = p_drop_collision
+
+            init_joint = pose
+
+        else:
+
+            if current_ratio > target_collision_ratio:
+                keep_prob = 1.0 - p_drop_no_collision
+            else:
+                keep_prob = p_drop_no_collision
+
+        if random() > keep_prob:
+            continue
+
+        joint_list.append(pose)
+        colli_list.append(has_collision)
+
+        if has_collision:
+            collision_count += 1
+        else:
+            no_collision_count += 1
+
+    # --------------------------------
+    # 保存数据
+    # --------------------------------
+
+    joint = np.asarray(joint_list)
+    colls = np.asarray(colli_list)
+
+    final_collision_ratio = collision_count / len(joint_list) if len(joint_list) > 0 else 0
+    print(f"Sample {sample_id}: Collision ratio = {final_collision_ratio:.3f} " f"(Collision: {collision_count}, No Collision: {no_collision_count})")
+
+    out_dir = os.path.join(
+        save_dir,
+        f"sample_{sample_id:05d}"
+    )
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # statistics
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.pie( [collision_count, no_collision_count], labels=["Collision", "No Collision"], autopct='%1.1f%%' )
+    plt.title(f"Collision Distribution\nRatio: {final_collision_ratio:.3f}")
+    plt.subplot(1, 2, 2)
+    plt.bar(["Collision", "No Collision"], [collision_count, no_collision_count])
+    plt.title("Sample Counts")
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "balance_analysis.jpg")) 
+    plt.close()
+
+    np.savez(
+        os.path.join(out_dir, "data.npz"),
+        joint=joint,
+        collision=colls,
+    )
+
+    mujoco.mj_forward(model, data)
+
+    pc = generate_obstacle_pointcloud(
+        model,
+        data,
+        1000
+    )
+
+    if pc is not None:
+        save_ply_xyz(
+            os.path.join(out_dir, "obstacles.ply"),
+            pc
+        )
+
+    return True
 
 def generate_data(
-    num_actors,
+    num_workers,
     num_samples,
-    scene_xml_dir,
+    scene_dir,
     save_dir,
-    args,
-    is_canonical=False,
-    is_test=False,
+    root_name,
 ):
     """Generate collision data using Ray actors."""
-    scene_xmls = sorted(Path(scene_xml_dir).glob("scene_*.xml"))
-    assert len(scene_xmls) > 0, "No scene XML files found"
+    scene_xmls = sorted(
+        Path(scene_dir).glob("scene_*.xml")
+    )
 
-    actors = [MujocoActor.remote(i, save_dir, args) for i in range(num_actors)]
+    running = []
 
-    tasks = []
+    pbar = tqdm(total=num_samples)
+
     for i in range(num_samples):
-        actor = actors[i % num_actors]
-        scene_xml = scene_xmls[i % len(scene_xmls)]
-        task = actor.generate_and_save_pc.remote(
-            str(scene_xml),
-            sample_id=i,
-            is_canonical=is_canonical,
-            is_test=is_test,
+
+        scene = str(
+            scene_xmls[i % len(scene_xmls)]
         )
-        tasks.append(task)
 
-    pbar = tqdm(total=num_samples, desc="Generating collision data")
-    start = time.time()
+        task = generate_sample.remote(
+            scene,
+            i,
+            save_dir,
+            root_name,
+        )
 
-    while True:
-        prefix = "canonical_" if is_canonical else "test_" if is_test else ""
-        done = len(glob.glob(os.path.join(save_dir, f"{prefix}sample_*")))
-        pbar.n = done
-        pbar.refresh()
-        if done >= num_samples:
-            break
-        time.sleep(1)
+        running.append(task)
+
+        if len(running) >= num_workers * 2:
+
+            done, running = ray.wait(
+                running,
+                num_returns=1
+            )
+
+            pbar.update(1)
+
+    while running:
+
+        done, running = ray.wait(
+            running,
+            num_returns=1
+        )
+
+        pbar.update(1)
 
     pbar.close()
-    ray.get(tasks)
-
 
 if __name__ == "__main__":
     import argparse
@@ -388,7 +431,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num_scenes", type=int, default=1000)
     parser.add_argument("--num_samples", type=int, default=1000)
-    parser.add_argument("--num_actors", type=int, default=8)
+    parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--root_name", type=str, default="base")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -412,15 +455,15 @@ if __name__ == "__main__":
         args.model_xml_dir,
         args.num_scenes,
     )
-
+    
     # Step 2: Generate data using Ray
     print("\nStep 2: Generating collision data using Ray...")
-    ray.init(ignore_reinit_error=True)
+    ray.init()
 
     generate_data(
-        num_actors=args.num_actors,
-        num_samples=args.num_samples,
-        scene_xml_dir=args.model_xml_dir,
-        save_dir=save_dir,
-        args=args,
+        args.num_workers,
+        args.num_samples,
+        args.model_xml_dir,
+        save_dir,
+        args.root_name,
     )

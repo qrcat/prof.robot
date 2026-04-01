@@ -102,6 +102,7 @@ class HyperEnbedding(nn.Module):
 
         return [model_joints[joint] for joint in pk_chain.get_joint_parameter_names()]
 
+
 class AdditiveAttentionPool(nn.Module):
     def __init__(self, feat_dim, hidden_dim=128):
         super().__init__()
@@ -156,8 +157,6 @@ class PointNet(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim * 2),
                 nn.LeakyReLU(),
             )
-        
-        self.attn_pool = AdditiveAttentionPool(hidden_dim * 2)
 
         # Global feature extraction MLP
         if use_bn:
@@ -182,7 +181,9 @@ class PointNet(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+                nn.init.kaiming_normal_(
+                    m.weight, mode="fan_out", nonlinearity="leaky_relu"
+                )
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm1d):
@@ -207,8 +208,7 @@ class PointNet(nn.Module):
 
         # Pooling
         x = x.view(batch_size, num_points, -1)
-        x = self.attn_pool(x)
-        
+        x = x.max(dim=1)[0]
 
         # Extract global features: (B, hidden_dim*2) -> (B, output_dim)
         x = self.mlp2(x)
@@ -253,7 +253,12 @@ class HyperNetwork(nn.Module):
             nn.Linear(hidden_dim, output_dim),
         )
 
-        self.s = nn.Parameter(torch.tensor([init_s], requires_grad=True))
+        s = torch.tensor([init_s])
+
+        if init_s == 0.0:
+            self.register_buffer('s', s)
+        else:
+            self.s = nn.Parameter(s, requires_grad=True)
 
     def forward(self, x):
         x = self.encoder(x)

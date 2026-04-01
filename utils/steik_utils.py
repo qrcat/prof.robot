@@ -92,13 +92,13 @@ class StEikLoss(nn.Module):
         self.div_type = div_type
         self.use_div = True if "div" in self.loss_type else False
 
-    def forward(self, nonmnfld_points, nonmanifold_pnts_pred, remap_index):
+    def forward(self, nonmnfld_points, nonmanifold_pnts_pred):
         #########################################
         # Compute required terms
         #########################################
         div_loss = torch.tensor([0.0], device=nonmnfld_points.device)
-
-        nonmnfld_grad = gradient(nonmnfld_points, nonmanifold_pnts_pred)[:, remap_index]
+        
+        nonmnfld_grad = gradient(nonmnfld_points, nonmanifold_pnts_pred)
 
         # div_term
         if self.use_div and self.weights[4] > 0.0:
