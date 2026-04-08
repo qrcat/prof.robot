@@ -153,9 +153,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_path", type=str, default="data/universal_robots_ur5e_collision"
     )
-    args = parser.parse_args(
-        ["--data_path", "data/universal_robots_ur5e_scene3_collision"]
-    )
+    args = parser.parse_args()
     ##################################################################################
     data_path = pathlib.Path(args.data_path)
     print("load pkl data from", data_path)
@@ -190,7 +188,7 @@ if __name__ == "__main__":
     res = faiss.StandardGpuResources()
     s = torch.cuda.Stream()
     with torch.cuda.stream(s):
-        D, I = faiss.knn_gpu(res, new_quat_w__c, new_quat_wo_c, 1, use_raft=False)
+        D, I = faiss.knn_gpu(res, new_quat_w__c, new_quat_wo_c, 1)
     print("compute successful")
 
     dist_w__c = D.cpu().detach().numpy() / collision_j.shape[1]

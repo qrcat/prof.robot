@@ -82,6 +82,8 @@ class MujocoActor:
         self.joint_range = self.model.jnt_range[self.used_index]
 
         save_robot_metadata(self.model, self.model_xml_dir, self.save_dir)
+        
+
 
     def get_uniform_pose(self) -> np.ndarray:
         return np.random.uniform(self.joint_range[:, 0], self.joint_range[:, 1])
@@ -104,35 +106,72 @@ class MujocoActor:
         joint_list = []
         colli_list = []
 
-        p_reset = 1.0
-        p_drop = 0.0
+        # --------------------------------
+        # 自适应采样参数
+        # --------------------------------
+        num_poses = 10000  # 目标样本数
+        target_collision_ratio = 0.5  # 目标碰撞比例 1:1
+        max_iterations = num_poses * 5  # 最大迭代次数
+        
+        # 动态调整参数
+        p_reset = 0.1
+        p_drop_collision = 0.1
+        p_drop_no_collision = 0.1
         std = 1.0
-
+        
         init_joint = None
-        while len(joint_list) < 100000:
-            if init_joint is not None and random() < p_reset: init_joint = None
+        iterations = 0
+        collision_count = 0
+        no_collision_count = 0
 
-            if init_joint is None:
-                pose = self.get_uniform_pose()
-            else:
-                pose = self.resample_pose(init_joint, std)
+        # --------------------------------
+        # 自适应采样循环
+        # --------------------------------
+        while len(joint_list) < num_poses and iterations < max_iterations:
+            iterations += 1
+
+            if init_joint is not None and random() < p_reset:
+                init_joint = None
+
+            pose = self.get_uniform_pose() if init_joint is None else self.resample_pose(init_joint, std)
 
             mujoco.mj_resetData(self.model, self.data)
             self.data.qpos[self.used_index] = pose
             mujoco.mj_step(self.model, self.data)
             mujoco.mj_collision(self.model, self.data)
 
-            if self.data.ncon > 0:
+            has_collision = self.data.ncon > 0
+            current_ratio = collision_count / max(len(joint_list), 1)
+
+            # --------------------------------
+            # 动态采样策略
+            # --------------------------------
+            if has_collision:
+                if current_ratio < target_collision_ratio:
+                    keep_prob = 1.0 - p_drop_collision
+                else:
+                    keep_prob = p_drop_collision
                 init_joint = pose
-            elif random() < p_drop:
+            else:
+                if current_ratio > target_collision_ratio:
+                    keep_prob = 1.0 - p_drop_no_collision
+                else:
+                    keep_prob = p_drop_no_collision
+
+            if random() > keep_prob:
                 continue
 
             joint_list.append(pose)
-            colli_list.append(self.data.ncon)
+            colli_list.append(has_collision)
 
-        self.used_index
+            if has_collision:
+                collision_count += 1
+            else:
+                no_collision_count += 1
 
-        #file saving stuff
+        # --------------------------------
+        # 保存数据
+        # --------------------------------
         directory_name = f"sample_{sample_id}" 
         if is_canonical:
             directory_name = "canonical_" + directory_name
@@ -140,21 +179,30 @@ class MujocoActor:
             directory_name = "test_" + directory_name
         unique_dir = os.path.join(self.save_dir, directory_name)
 
-        # Use FileLock to ensure only one actor creates the directory
-
         if not os.path.exists(unique_dir):
             os.makedirs(unique_dir, exist_ok=True)
 
         joint = np.asarray(joint_list)
         colls = np.asarray(colli_list)
 
-        non_coll_num = (colls==0).sum()
-        coll_num = len(colls) - non_coll_num
-        plt.figure()
-        plt.pie([coll_num, non_coll_num], labels=['Collision', 'No Collision'])
-        plt.legend()
-        plt.savefig(os.path.join(unique_dir, 'pie.jpg'))
+        final_collision_ratio = collision_count / len(joint_list) if len(joint_list) > 0 else 0
+        
+        # 保存统计信息
+        plt.figure(figsize=(10, 5))
+        plt.subplot(1, 2, 1)
+        plt.pie([collision_count, no_collision_count], labels=['Collision', 'No Collision'], autopct='%1.1f%%')
+        plt.title(f"Collision Distribution\nRatio: {final_collision_ratio:.3f}")
+        plt.subplot(1, 2, 2)
+        plt.bar(['Collision', 'No Collision'], [collision_count, no_collision_count])
+        plt.title("Sample Counts")
+        plt.ylabel("Count")
+        plt.tight_layout()
+        plt.savefig(os.path.join(unique_dir, 'balance_analysis.jpg'))
         plt.close()
+
+        if verbose:
+            print(f"Sample {sample_id}: Collision ratio = {final_collision_ratio:.3f} "
+                  f"(Collision: {collision_count}, No Collision: {no_collision_count})")
 
         with open(os.path.join(unique_dir, 'data.npz'), 'wb') as f:
             np.savez(
@@ -235,22 +283,15 @@ if __name__ == "__main__":
     parser.add_argument('--model_xml_dir', type=str, default="mujoco_menagerie/universal_robots_ur5e", help='Path to the model XML file.')
     parser.add_argument('--dataset_name', type=str, default=None, help='Name of the dataset.')
     parser.add_argument('--num_canonical_samples', type=int, default=500, help='Number of canonical samples.')
-    parser.add_argument('--num_samples', type=int, default=100, help='Number of samples.')
+    parser.add_argument('--num_samples', type=int, default=1000, help='Number of samples.')
     parser.add_argument('--num_test', type=int, default=500, help='Number of test samples.')
-    parser.add_argument('--num_actors', type=int, default=20, help='Number of actors.')
+    parser.add_argument('--num_actors', type=int, default=10, help='Number of actors.')
     parser.add_argument('--camera_distance_factor', type=float, default=1.0, help='Factor to scale the camera distance, change this depending on robot size.')
     parser.add_argument('--debug', action='store_true', help='Debug mode.')
     parser.add_argument('--verbose', action='store_true', help='Verbose mode.')
     parser.add_argument('--root_name', type=str, default='base', help='Root name of the robot.')
-    args = parser.parse_args(
-        [
-            # "--model_xml_dir", "collision_scene/xMate_SR3",
-            # "--root_name", "xMateSR3_base"
-
-            '--model_xml_dir', 'collision_scene/universal_robots_ur5e_scene3',
-            '--root_name', 'base',
-        ]
-    )
+    # 自适应采样参数已内置，无需手动调节
+    args = parser.parse_args()
 
     model_xml_dir = args.model_xml_dir   
     if not args.dataset_name:
